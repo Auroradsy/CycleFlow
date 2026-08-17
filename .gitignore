@@ -1,0 +1,44 @@
+# --- data ------------------------------------------------------------------
+# ADNI is distributed under a Data Use Agreement that does not permit
+# redistribution.  Neither the imaging cache nor the subject-level label table
+# belongs in a public repository.
+#
+# NOTE: this ignores data/cache and data/labels.csv only.  `data/` itself is a
+# source package now (paired_dataset.py, build_cache.py, preprocess/) and must
+# stay tracked.
+data/cache
+data/labels.csv
+*.nii
+*.nii.gz
+
+# --- run outputs -----------------------------------------------------------
+# Weights and per-epoch logs are reproducible from configs/; the figures in
+# snapshot_results/ are NOT ignored — they are the point of the repo.
+checkpoints/
+logs/
+*.pth
+*.pt
+*.ckpt
+*.npy
+*.npz
+
+# --- not part of the release ----------------------------------------------
+# (gitignore has NO inline comments — a trailing "# ..." becomes part of the
+#  pattern and silently matches nothing.  Keep comments on their own lines.)
+# the exploration archive: vanilla CLAST, the five baselines, old ADNI runs
+__outdated_files/
+# working notes
+X_files/
+# the paper and its LaTeX intermediates
+paper_writing/
+
+# --- python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+
+# --- junk ------------------------------------------------------------------
+__MACOSX/
+*.zip
+.DS_Store
