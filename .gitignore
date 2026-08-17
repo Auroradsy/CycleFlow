@@ -14,10 +14,7 @@ data/labels.csv
 # --- run outputs -----------------------------------------------------------
 # Weights and per-epoch logs are reproducible from configs/; the figures in
 # snapshot_results/ are NOT ignored — they are the point of the repo.
-checkpoints/
-logs/
 paper_writing/
-snapshot_results/
 *.pth
 *.pt
 *.ckpt
@@ -33,6 +30,7 @@ __outdated_files/
 X_files/
 # the paper and its LaTeX intermediates
 paper_writing/
+exps/
 
 # --- python ----------------------------------------------------------------
 __pycache__/
