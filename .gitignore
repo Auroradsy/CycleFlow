@@ -27,7 +27,7 @@ paper_writing/
 # the exploration archive: vanilla CLAST, the five baselines, old ADNI runs
 __outdated_files/
 # working notes
-X_files/
+__X_files/
 # the paper and its LaTeX intermediates
 paper_writing/
 exps/
