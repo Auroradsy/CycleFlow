@@ -16,6 +16,8 @@ data/labels.csv
 # snapshot_results/ are NOT ignored — they are the point of the repo.
 checkpoints/
 logs/
+paper_writing/
+snapshot_results/
 *.pth
 *.pt
 *.ckpt
