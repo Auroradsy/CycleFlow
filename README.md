@@ -320,29 +320,3 @@ Roughly 12 h per variant on a single A6000 at the default schedule
 | `pre_relu` | 1 | tap the bottleneck *before* `down`'s last ReLU. Leave on: otherwise `feat ≥ 0`, and a non-negative code cannot host a signed flow output |
 | `w_latcyc` | 2.0 | 0 in `base` |
 | `w_path_gan` / `w_path_smooth` | 0.5 / 1.0 | 0 outside `morph` |
-
-## Diagnostics
-
-Both are printed every evaluation and written to `checkpoints/<tag>/final_eval.txt`.
-
-- **`flow_work` = ‖f(z) − z‖₂ / ‖z‖₂** — how far the flow actually moves the
-  code. ≈ 0 means identity collapse: the flow has been trained into a no-op and
-  the two feature spaces aligned on their own. Very large values (we saw 92.4 in
-  one pathological run) mean it has left the decoder's manifold.
-- **`latent_gap` = ‖f(z_A) − E_B(FA)‖₂ / ‖E_B(FA)‖₂** — how close the flow's
-  output lands to where B's own encoder would put that subject. **Reported, never
-  optimised.** Optimising it directly (an L2 `pair` term) costs reconstruction
-  quality; `L_latcyc` pulls it down as a by-product instead (2.22 → 0.82) for
-  only 0.008 / 0.016 SSIM.
-
-## Known limitations
-
-- The S2 early-stop criterion (val L1) is blunt: train cross-loss keeps falling
-  while val plateaus, so the restored checkpoint can be ~0.01 SSIM worse than a
-  later epoch. Monitoring val SSIM, or widening `p2`, would fix it.
-- The `D_A`/`D_B` `mean|Δ|` figures above come from a single slice (250). The
-  trend is confirmed on slices 50/150/250, but they are illustrations, not
-  test-set statistics.
-- The fourth ablation cell — `L_path` without `L_latcyc` — has not been run.
-- The middle-10 band reduces but does not remove slice position as a confound
-  (ratio 1.29, see above).
