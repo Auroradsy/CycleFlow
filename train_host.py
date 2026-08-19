@@ -40,8 +40,9 @@ from model import ResnetGenerator, PatchDiscriminator, init_weights
 
 # The host's weights are what train.py splits into E/D, so they live beside the
 # MMCLAST-cg runs.  HOST_TAG picks the sub-directory (default: the mid-10 host).
-RESULTS = os.path.join(_HERE, "checkpoints", os.environ.get("HOST_TAG", "host"))
-LOGDIR = os.path.join(_HERE, "logs", os.environ.get("HOST_TAG", "host"))
+EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+RESULTS = os.path.join(EXPS, "checkpoints", os.environ.get("HOST_TAG", "host"))
+LOGDIR = os.path.join(EXPS, "logs", os.environ.get("HOST_TAG", "host"))
 os.makedirs(RESULTS, exist_ok=True); os.makedirs(LOGDIR, exist_ok=True)
 
 

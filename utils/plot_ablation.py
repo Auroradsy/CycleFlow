@@ -39,12 +39,16 @@ from model import MMCLASTcg                                              # noqa:
 from utils.image import to_pm1, first_frame as _n                      # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CKPT = os.path.join(_ROOT, "checkpoints")
-FIGS = os.path.join(_ROOT, "snapshot_results")
+EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+CKPT = os.path.join(EXPS, "checkpoints")
+FIGS = os.path.join(EXPS, "snapshot_results")
 
-NICE = {"base":   "base\nno L_latcyc\nno L_path",
-        "latcyc": "+ L_latcyc\n(fixed point)",
-        "morph":  "+ L_latcyc\n+ L_path\n(adversarial)"}
+NICE = {"base":            "base\nno L_latcyc\nno L_path",
+        "latcyc":          "+ L_latcyc\n(fixed point)",
+        "morph":           "+ L_latcyc\n+ L_path\n(adversarial)",
+        "morph_s3ctl":     "L_path\nFORWARD only\n(control)",
+        "morph_bi_s3ctl":  "L_path\nBOTH directions",
+        "morph_bi":        "L_path\nBOTH directions\n(full run)"}
 
 
 def load(tag):
@@ -70,7 +74,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tags", nargs="+", default=["base", "latcyc", "morph"])
     ap.add_argument("--slices", type=int, nargs="+", default=[50, 250])
+    ap.add_argument("--direction", default="a2b", choices=["a2b", "b2a"],
+                    help="a2b = T1->FA (walk f forward);  b2a = FA->T1 (walk f back)")
+    ap.add_argument("--out", default="32_mmclast_cg_morph_ablation.png")
     a = ap.parse_args()
+    fwd = a.direction == "a2b"
     os.makedirs(FIGS, exist_ok=True)
     build_cache()
     _, te = subject_level_split(42, 0.20, "label_4")
@@ -84,8 +92,13 @@ def main():
         cur = []
         for si in a.slices:
             t1, fa, _ = ds[si]
-            T = to_pm1(t1.unsqueeze(0).to(DEV))
-            states = m.walk(m.enc_A(T))
+            if fwd:
+                code = m.enc_A(to_pm1(t1.unsqueeze(0).to(DEV)))
+                src_im, tgt_im = t1[0].numpy(), fa[0].numpy()
+            else:
+                code = m.enc_B(to_pm1(fa.unsqueeze(0).to(DEV)))
+                src_im, tgt_im = fa[0].numpy(), t1[0].numpy()
+            states = m.walk(code, inverse=not fwd)
             lab = NICE.get(tag, tag)
             if st:
                 lab += f"\nfw {float(st.get('flow_work', 'nan')):.2f}"
@@ -96,16 +109,17 @@ def main():
             for dec_name, dec in (("D_A (T1 view)", m.dec_A), ("D_B (FA view)", m.dec_B)):
                 seq = [_n(dec(s)) for s in states]
                 d = [float(np.abs(seq[i] - seq[0]).mean()) for i in range(len(seq))]
-                rows.append((f"{lab}\nslice {si}\n{dec_name}", t1[0].numpy(), seq, fa[0].numpy()))
+                rows.append((f"{lab}\nslice {si}\n{dec_name}", src_im, seq, tgt_im))
                 print(f"{tag:8s} slice {si} {dec_name:14s}: mean|Δ| = "
                       + " ".join(f"{x:.3f}" for x in d))
-                if dec is m.dec_B:
+                if dec is (m.dec_B if fwd else m.dec_A):
                     cur.append(d)
         curves[tag] = np.mean(cur, 0)
 
     L = len(rows[0][2]) - 1
-    cols = (["T1 (src)", "z\n(A rep)"] + [f"b{i+1}" for i in range(L - 1)]
-            + ["u = f(z)\n(B rep)", "FA (tgt)"])
+    ends = (("T1 (src)", "z\n(A rep)", "u = f(z)\n(B rep)", "FA (tgt)") if fwd else
+            ("FA (src)", "u\n(B rep)", "z = f\u207b\u00b9(u)\n(A rep)", "T1 (tgt)"))
+    cols = ([ends[0], ends[1]] + [f"b{i+1}" for i in range(L - 1)] + [ends[2], ends[3]])
     nc = len(cols) + 1                                   # + the mean|Δ| panel
     fig, ax = plt.subplots(len(rows), nc, figsize=(1.5 * nc, 1.7 * len(rows)))
     ax = np.atleast_2d(ax)
@@ -127,12 +141,13 @@ def main():
     for c, t in enumerate(cols):
         ax[0, c].set_title(t, fontsize=8)
     ax[0, nc - 1].set_title("mean|Δ| vs z\n(path progress)", fontsize=7.5)
-    fig.suptitle("MMCLAST-cg — what makes the flow's own path decodable\n"
+    fig.suptitle(f"MMCLAST-cg — what makes the flow's own path decodable "
+                 f"({'T1 → FA' if fwd else 'FA → T1'})\n"
                  "every frame is a block state of f decoded by D_A (T1 view) or D_B (FA view).  A usable morph "
                  "needs the change to appear in the FA view\nwhile the T1 view stays a valid brain — not the "
                  "other way round.", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
-    out = os.path.join(FIGS, "32_mmclast_cg_morph_ablation.png")
+    out = os.path.join(FIGS, a.out)
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
     print("saved", out)
 

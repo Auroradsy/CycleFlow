@@ -40,8 +40,9 @@ from model import MMCLASTcg                                              # noqa:
 from utils.image import to_pm1, first_frame as _n, ssim as S                      # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CKPT = os.path.join(_ROOT, "checkpoints")
-FIGS = os.path.join(_ROOT, "snapshot_results")
+EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+CKPT = os.path.join(EXPS, "checkpoints")
+FIGS = os.path.join(EXPS, "snapshot_results")
 
 
 def load(tag):
@@ -55,40 +56,72 @@ def load(tag):
 
 
 @torch.no_grad()
-def fig_morph(m, ds, slices, tag):
+def fig_morph(m, ds, slices, tag, direction="a2b"):
+    """Decode every block state of the flow with BOTH decoders.
+
+    direction="a2b"  T1 -E_A-> z --f--> u -D_B-> FA        (forward)
+    direction="b2a"  FA -E_B-> u --f^-1--> z -D_A-> T1     (inverse)
+
+    The two directions are the SAME weights traversed opposite ways, so any
+    asymmetry between these figures is a statement about training, not capacity.
+    Worth knowing while reading the b2a one: L_path only ever walks forward
+    (train.py calls m.walk(zA) and nothing else), so the intermediate states
+    below are completely unsupervised — no realism critic, no smoothness term
+    has ever seen them.
+    """
+    fwd = direction == "a2b"
     rows = []
     for si in slices:
         t1, fa, _ = ds[si]
-        T = to_pm1(t1.unsqueeze(0).to(DEV)); F = fa.unsqueeze(0)
-        states = m.walk(m.enc_A(T))                       # z, b1..bL (bL = u)
-        dA = [_n(m.dec_A(s)) for s in states]
-        dB = [_n(m.dec_B(s)) for s in states]
-        rows.append((f"slice {si}\nD_A(path)\n(T1 view)", t1[0].numpy(), dA, fa[0].numpy()))
-        rows.append((f"slice {si}\nD_B(path)\n(FA view)", t1[0].numpy(), dB, fa[0].numpy()))
-        d = [float(np.abs(dB[i] - dB[0]).mean()) for i in range(len(dB))]
-        print(f"  slice {si}: D_B(path) mean|Δ| vs frame0 = " +
-              " ".join(f"{x:.3f}" for x in d), flush=True)
+        t1n, fan = t1[0].numpy(), fa[0].numpy()
+        if fwd:
+            code = m.enc_A(to_pm1(t1.unsqueeze(0).to(DEV)))
+            src, tgt = t1n, fan
+        else:
+            code = m.enc_B(to_pm1(fa.unsqueeze(0).to(DEV)))
+            src, tgt = fan, t1n
+        states = m.walk(code, inverse=not fwd)
+
+        dA = [_n(m.dec_A(s)) for s in states]              # T1 view
+        dB = [_n(m.dec_B(s)) for s in states]              # FA view
+        # source view first, target view second
+        src_seq, src_lab = (dA, "D_A(path)\n(T1 view)") if fwd else (dB, "D_B(path)\n(FA view)")
+        tgt_seq, tgt_lab = (dB, "D_B(path)\n(FA view)") if fwd else (dA, "D_A(path)\n(T1 view)")
+        rows.append((f"slice {si}\n{src_lab}", src, src_seq, tgt))
+        rows.append((f"slice {si}\n{tgt_lab}", src, tgt_seq, tgt))
+        d = [float(np.abs(tgt_seq[i] - tgt_seq[0]).mean()) for i in range(len(tgt_seq))]
+        print(f"  slice {si}: {tgt_lab.splitlines()[0]} mean|Δ| vs frame0 = "
+              + " ".join(f"{x:.3f}" for x in d), flush=True)
 
     L = len(rows[0][2]) - 1
-    labels = ["z\n(A rep)"] + [f"b{i+1}" for i in range(L - 1)] + ["u = f(z)\n(B rep)"]
-    cols = ["T1 (src)"] + labels + ["FA (tgt)"]
+    ends = (("z\n(A rep)", "u = f(z)\n(B rep)", "T1 (src)", "FA (tgt)") if fwd else
+            ("u\n(B rep)", "z = f⁻¹(u)\n(A rep)", "FA (src)", "T1 (tgt)"))
+    labels = [ends[0]] + [f"b{i+1}" for i in range(L - 1)] + [ends[1]]
+    cols = [ends[2]] + labels + [ends[3]]
     fig, ax = plt.subplots(len(rows), len(cols), figsize=(1.5 * len(cols), 1.65 * len(rows)))
-    for r, (lab, src, seq, tgt) in enumerate(rows):
-        for c, im in enumerate([src] + seq + [tgt]):
+    for r, (lab, s_im, seq, t_im) in enumerate(rows):
+        for c, im in enumerate([s_im] + seq + [t_im]):
             A = ax[r, c]; A.imshow(im, cmap="gray", vmin=0, vmax=1)
             A.set_xticks([]); A.set_yticks([])
-            if c == len(seq):                              # the endpoint u
+            if c == len(seq):                              # the endpoint
                 for s in A.spines.values():
                     s.set_color("#d62728"); s.set_linewidth(1.8)
         ax[r, 0].set_ylabel(lab, fontsize=7.5, rotation=0, ha="right", va="center")
     for c, t in enumerate(cols):
         ax[0, c].set_title(t, fontsize=8.5)
-    fig.suptitle(f"MMCLAST-cg ({tag}) — native path morph along the single shared flow\n"
-                 "z --b1..bL--> u  (f applied ONCE: A-space → B-space); red = u, B's "
-                 "representation.  Frames are the flow's own block outputs, not an interpolation.",
-                 fontsize=11)
+    if fwd:
+        sub = ("z --b1..bL--> u  (f applied ONCE: A-space → B-space); red = u, B's "
+               "representation.  Frames are the flow's own block outputs, not an interpolation.")
+    else:
+        sub = ("u --b1..bL--> z  (f⁻¹ applied ONCE: B-space → A-space); red = z, A's "
+               "representation.\nSAME weights as the forward figure, run backwards — but "
+               "L_path never walks this way, so these intermediates are unsupervised.")
+    fig.suptitle(f"MMCLAST-cg ({tag}) — native path morph, "
+                 f"{'T1 → FA' if fwd else 'FA → T1'}\n{sub}", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    out = os.path.join(FIGS, f"30_mmclast_cg_morph_{tag}.png")
+    name = (f"30_mmclast_cg_morph_{tag}.png" if fwd else
+            f"33_mmclast_cg_morph_b2a_{tag}.png")
+    out = os.path.join(FIGS, name)
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
     print("saved", out)
 
@@ -139,6 +172,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", default="morph")
     ap.add_argument("--slices", type=int, nargs="+", default=[50, 150, 250])
+    ap.add_argument("--directions", nargs="+", default=["a2b"],
+                    choices=["a2b", "b2a"],
+                    help="a2b = T1->FA (fig 30);  b2a = FA->T1 (fig 33)")
+    ap.add_argument("--self_cross", type=int, default=1,
+                    help="also draw fig 31 (self vs cross)")
     a = ap.parse_args()
     os.makedirs(FIGS, exist_ok=True)
     m, cfg = load(a.tag)
@@ -147,8 +185,10 @@ def main():
     build_cache()
     _, te = subject_level_split(42, 0.20, "label_4")
     ds = PairedADNISliceDataset(te, "label_4")
-    fig_morph(m, ds, a.slices, a.tag)
-    fig_self_cross(m, ds, a.slices, a.tag)
+    for d in a.directions:
+        fig_morph(m, ds, a.slices, a.tag, d)
+    if a.self_cross:
+        fig_self_cross(m, ds, a.slices, a.tag)
 
 
 if __name__ == "__main__":

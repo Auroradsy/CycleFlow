@@ -15,10 +15,15 @@ fi
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
+# All run outputs live under exps/ (matches EXPS in train.py; MMCLAST_EXPS
+# overrides both).
+export MMCLAST_EXPS="${MMCLAST_EXPS:-$MMCLAST_ROOT/exps}"
+
 # run <tag> <extra args...>  — train, teeing stdout next to the epoch csv.
 run () {
   local tag="$1"; shift
-  mkdir -p "logs/$tag"
-  echo "[$(date '+%F %T')] $tag on GPU $CUDA_VISIBLE_DEVICES -> logs/$tag/train.log"
-  python train.py --config "configs/$tag.yaml" "$@" 2>&1 | tee "logs/$tag/train.log"
+  mkdir -p "$MMCLAST_EXPS/logs/$tag"
+  echo "[$(date '+%F %T')] $tag on GPU $CUDA_VISIBLE_DEVICES -> $MMCLAST_EXPS/logs/$tag/train.log"
+  python train.py --config "configs/$tag.yaml" "$@" 2>&1 \
+    | tee "$MMCLAST_EXPS/logs/$tag/train.log"
 }

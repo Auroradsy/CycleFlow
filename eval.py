@@ -40,7 +40,8 @@ from model import MMCLASTcg                                              # noqa:
 from utils.image import to_pm1, to_01, ssim_batch                        # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CKPT = os.path.join(_HERE, "checkpoints")
+EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+CKPT = os.path.join(EXPS, "checkpoints")
 
 
 def cross_subject_perm(subj, seed=0):

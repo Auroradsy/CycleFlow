@@ -61,8 +61,11 @@ from utils.pool import ImagePool                                         # noqa:
 from utils.config import parse_with_config                               # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CKPT = os.path.join(_HERE, "checkpoints")
-LOGS = os.path.join(_HERE, "logs")
+# Everything a run produces lives under exps/ (gitignored).  Override the whole
+# tree with MMCLAST_EXPS to keep several experiment sets side by side.
+EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+CKPT = os.path.join(EXPS, "checkpoints")
+LOGS = os.path.join(EXPS, "logs")
 CFM_T1FA, CFM_FAT1 = 0.729, 0.790          # best baseline, RECON_RESULTS.md §1
 
 
@@ -149,7 +152,8 @@ def main():
         description="MMCLAST-cg three-stage trainer.  See configs/ for ready-made runs.")
     ap.add_argument("--config", default=None,
                     help="YAML of hyperparameters; command-line flags still win")
-    ap.add_argument("--variant", choices=["base", "latcyc", "morph"], default="morph")
+    ap.add_argument("--variant", choices=["base", "latcyc", "morph", "morph_bi"],
+                    default="morph")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--warm", default=os.path.join(CKPT, "host", "last.pth"),
                     help="plain-CycleGAN checkpoint to split into E/D ('' = from scratch)")
@@ -157,6 +161,12 @@ def main():
     ap.add_argument("--z_lo", type=int, default=40, help="axial band low, inclusive")
     ap.add_argument("--z_hi", type=int, default=49, help="axial band high, inclusive")
     ap.add_argument("--label_scheme", default="label_4")
+    ap.add_argument("--resume_stage", type=int, default=0,
+                    help="skip stages <= this and load weights from --resume_from. "
+                         "Use 2 to share one S1+S2 across variants so that S3 is "
+                         "the only thing that differs.")
+    ap.add_argument("--resume_from", default="",
+                    help="stage checkpoint to resume from (default: this tag's own)")
     ap.add_argument("--check_init", action="store_true",
                     help="verify f=id + the E/D split reproduces the host, then exit")
     # schedule
@@ -181,6 +191,8 @@ def main():
     ap.add_argument("--w_latcyc", type=float, default=2.0)
     ap.add_argument("--w_path_gan", type=float, default=0.5)
     ap.add_argument("--w_path_smooth", type=float, default=1.0)
+    ap.add_argument("--path_bidir", type=int, default=0,
+                    help="also supervise the B->A path (walk f backwards, read with D_A)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=42)
     a = parse_with_config(ap)
@@ -191,9 +203,13 @@ def main():
         a.warm = os.path.join(_HERE, a.warm)
 
     if a.variant == "base":
-        a.w_latcyc = 0.0; a.w_path_gan = 0.0; a.w_path_smooth = 0.0
+        a.w_latcyc = 0.0; a.w_path_gan = 0.0; a.w_path_smooth = 0.0; a.path_bidir = 0
     elif a.variant == "latcyc":
-        a.w_path_gan = 0.0; a.w_path_smooth = 0.0
+        a.w_path_gan = 0.0; a.w_path_smooth = 0.0; a.path_bidir = 0
+    elif a.variant == "morph":
+        a.path_bidir = 0
+    elif a.variant == "morph_bi":
+        a.path_bidir = 1
     use_path = a.w_path_gan > 0 or a.w_path_smooth > 0
     tag = a.tag or a.variant
     RESULTS = os.path.join(CKPT, tag)                 # weights + final_eval.txt
@@ -241,6 +257,23 @@ def main():
     for k in D:
         D[k] = D[k].to(DEV)
 
+    if a.resume_stage:
+        src = a.resume_from or os.path.join(RESULTS, f"stage{a.resume_stage}.pth")
+        if not os.path.isabs(src):
+            src = os.path.join(_HERE, src)
+        ck = torch.load(src, map_location=DEV)
+        m.load_state_dict(ck["model"])
+        # Stage checkpoints written before this flag existed carry no
+        # discriminators; those runs restart S3 with fresh critics.  Say so out
+        # loud — it is a real difference between two otherwise-identical runs,
+        # so every arm of a comparison must resume the same way.
+        have_d = [k for k in D if f"d_{k}" in ck]
+        for k in have_d:
+            D[k].load_state_dict(ck[f"d_{k}"])
+        print(f"resumed from {src} (through stage {ck.get('stage')}); "
+              f"discriminators: {'restored ' + ','.join(have_d) if have_d else 'FRESH (not in checkpoint)'}",
+              flush=True)
+
     n_host = sum(p.numel() for mod in (m.enc_A, m.enc_B, m.dec_A, m.dec_B)
                  for p in mod.parameters())
     print(f"params: host {n_host/1e6:.2f} M + flow {sum(p.numel() for p in m.flow.parameters())/1e6:.2f} M",
@@ -284,6 +317,9 @@ def main():
 
     ep_global = 0
     for stage, n_ep, patience in [(1, a.e1, a.p1), (2, a.e2, a.p2), (3, a.e3, a.p3)]:
+        if stage <= a.resume_stage:
+            print(f"  [stage{stage}] skipped (resumed)", flush=True)
+            continue
         set_stage(stage)
         if stage == 2:                       # the flow alone gets the full LR
             opt_G.param_groups[1]["lr"] = a.lr_flow * 2
@@ -338,16 +374,35 @@ def main():
                                  + (back_z - z).abs().mean() / (z.abs().mean() + 1e-8))
 
                     if stage == 3 and use_path:
-                        # trajectory supervision: one random adjacent pair per step
-                        states = m.walk(zA)
-                        t = random.randint(1, len(states) - 1)
-                        prev = m.dec_B(states[t - 1]); cur = m.dec_B(states[t])
-                        L_ps = (cur - prev).abs().mean()
+                        # Trajectory supervision: one random adjacent pair per
+                        # step, per supervised direction.
+                        #
+                        # A->B walks f forward and reads the states with D_B;
+                        # B->A walks f backward and reads them with D_A.  With
+                        # path_bidir=0 only the first exists, which is why every
+                        # FA->T1 intermediate is unsupervised (fig 33).
+                        #
+                        # Both halves are AVERAGED, not summed, so w_path_* keeps
+                        # the same effective scale in either mode and the
+                        # ablation is about direction rather than weight.
+                        legs = [(m.walk(zA), m.dec_B)]
+                        if a.path_bidir:
+                            legs.append((m.walk(uB, inverse=True), m.dec_A))
+
+                        path_imgs = []
+                        for states, dec in legs:
+                            t = random.randint(1, len(states) - 1)
+                            prev = dec(states[t - 1]); cur = dec(states[t])
+                            L_ps = L_ps + (cur - prev).abs().mean()
+                            path_imgs += [prev, cur]
+                        L_ps = L_ps / len(legs)
+
                         if a.w_path_gan > 0:
-                            for img in (prev, cur):
+                            for img in path_imgs:
                                 p = D["mix"](img)
                                 L_pg = L_pg + crit_gan(p, torch.ones_like(p))
-                            fakes["path"] = (torch.cat([prev, cur], 0), "mix")
+                            L_pg = L_pg / len(legs)
+                            fakes["path"] = (torch.cat(path_imgs, 0), "mix")
 
                 L_gan = torch.zeros((), device=DEV)
                 for _k, (img, dk) in fakes.items():
@@ -422,8 +477,9 @@ def main():
         if best_sn is not None:
             restore(best_sn)
             print(f"  [stage{stage}] restored best (val {best:.5f})", flush=True)
-        torch.save(dict(model=m.state_dict(), args=vars(a), stage=stage),
-                   os.path.join(RESULTS, f"stage{stage}.pth"))
+        snap = dict(model=m.state_dict(), args=vars(a), stage=stage)
+        snap.update({f"d_{k}": D[k].state_dict() for k in D})   # so a resume is exact
+        torch.save(snap, os.path.join(RESULTS, f"stage{stage}.pth"))
 
     # --- final ------------------------------------------------------------
     torch.save(dict(model=m.state_dict(), args=vars(a)), os.path.join(RESULTS, "model.pth"))

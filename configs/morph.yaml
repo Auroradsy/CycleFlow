@@ -19,7 +19,7 @@ workers: 4
 # warm start ---------------------------------------------------------------
 # The plain-CycleGAN checkpoint that gets split into E_A/D_B and E_B/D_A.
 # Set to "" to train the host from scratch inside stage 1 instead.
-warm: checkpoints/host/last.pth
+warm: exps/checkpoints/host/last.pth
 
 # schedule: epochs and early-stopping patience per stage --------------------
 e1: 120                   # S1  two independent autoencoders   (f frozen = id)

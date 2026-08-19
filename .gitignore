@@ -12,8 +12,9 @@ data/labels.csv
 *.nii.gz
 
 # --- run outputs -----------------------------------------------------------
-# Weights and per-epoch logs are reproducible from configs/; the figures in
-# snapshot_results/ are NOT ignored — they are the point of the repo.
+# Everything a run produces lives under exps/ — weights, per-epoch logs, and
+# the figures.  All reproducible from configs/ given the data.
+exps/
 paper_writing/
 *.pth
 *.pt

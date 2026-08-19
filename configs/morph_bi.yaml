@@ -1,13 +1,13 @@
-# MMCLAST-cg — variant "base"
-# Rewiring only. No L_latcyc, no L_path, no D_mix. Best cross-SSIM of the three; its morph changes the T1 view instead of the FA view (tearing).
+# MMCLAST-cg — variant "morph_bi"
+# Same as morph, but L_path also walks f BACKWARDS (B->A, read with D_A).
 #
-#   python train.py --config configs/base.yaml
+#   python train.py --config configs/morph_bi.yaml
 #
 # Flags typed on the command line override anything here.  The variant presets
 # in train.py are applied last, so w_latcyc / w_path_* are pinned by the variant
 # regardless of what this file says — they are listed for the record.
-variant: base
-tag: base
+variant: morph_bi
+tag: morph_bi
 
 # data --------------------------------------------------------------------
 z_lo: 40                  # axial band, inclusive.  40..49 = the "middle 10";
@@ -48,6 +48,9 @@ w_self: 10.0              # L1(D_A(z), T1) + L1(D_B(u), FA)
 w_cross: 10.0             # L1(D_B(f z), FA) + L1(D_A(f^-1 u), T1)
 w_gan: 1.0                # LSGAN against D_T1 / D_FA
 w_cyc: 10.0               # pixel cycle T1 -> FA -> T1
-w_latcyc: 0.0              # flow output must be a fixed point of the target AE
-w_path_gan: 0.0            # intermediate frames must look real to D_mix
-w_path_smooth: 0.0         # adjacent frames must be close in pixel space
+w_latcyc: 2.0              # flow output must be a fixed point of the target AE
+w_path_gan: 0.5            # intermediate frames must look real to D_mix
+w_path_smooth: 1.0         # adjacent frames must be close in pixel space
+
+# supervise the B->A path as well.  Pinned by the variant; listed for the record.
+path_bidir: 1
