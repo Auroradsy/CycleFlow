@@ -76,7 +76,7 @@ def main():
     ap.add_argument("--slices", type=int, nargs="+", default=[50, 250])
     ap.add_argument("--direction", default="a2b", choices=["a2b", "b2a"],
                     help="a2b = T1->FA (walk f forward);  b2a = FA->T1 (walk f back)")
-    ap.add_argument("--out", default="32_mmclast_cg_morph_ablation.png")
+    ap.add_argument("--out", default="32_mmclast_cg_morph_ablation_a2b.png")
     a = ap.parse_args()
     fwd = a.direction == "a2b"
     os.makedirs(FIGS, exist_ok=True)

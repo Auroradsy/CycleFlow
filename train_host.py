@@ -107,17 +107,45 @@ def main():
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--save_every", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42)
+    # --- unpaired image folders (CycleGAN layout) -------------------------
+    # `adni` is the original path and is untouched.  `folder` swaps in
+    # <root>/{trainA,trainB,testA,testB}; there is no ground-truth pairing, so
+    # the final SSIM/PSNR block is replaced by FID.
+    ap.add_argument("--data", default="adni", choices=["adni", "folder"])
+    ap.add_argument("--data_root", default="")
+    ap.add_argument("--img_ch", type=int, default=1)
+    ap.add_argument("--load_size", type=int, default=286)
+    ap.add_argument("--crop_size", type=int, default=256)
+    ap.add_argument("--dp", action="store_true",
+                    help="split each batch across all visible GPUs with "
+                         "nn.DataParallel.  Worth it only if the per-GPU batch "
+                         "stays large enough to amortise the per-step replicate/"
+                         "scatter/gather; raise --batch alongside it.")
+    ap.add_argument("--no_flip", action="store_true",
+                    help="disable h-flip augmentation; required for chiral "
+                         "content such as digits, where a mirrored sample is "
+                         "not a valid member of the domain")
     args = ap.parse_args()
+    if args.data == "folder" and not args.data_root:
+        ap.error("--data folder requires --data_root")
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  args={vars(args)}", flush=True)
 
     # --- data (train split only; treat as unpaired) ---
-    build_cache()
-    tr_idx, te_idx = subject_level_split(seed=42, test_frac=0.20,
-                                         label_scheme="label_4")
-    tr_ds = PairedADNISliceDataset(tr_idx, label_scheme="label_4")
+    if args.data == "adni":
+        build_cache()
+        tr_idx, te_idx = subject_level_split(seed=42, test_frac=0.20,
+                                             label_scheme="label_4")
+        tr_ds = PairedADNISliceDataset(tr_idx, label_scheme="label_4")
+        te_ds = PairedADNISliceDataset(te_idx, label_scheme="label_4")
+    else:
+        from data.unpaired_dataset import UnpairedFolderDataset
+        common = dict(load_size=args.load_size, crop_size=args.crop_size,
+                      img_ch=args.img_ch, seed=args.seed, flip=not args.no_flip)
+        tr_ds = UnpairedFolderDataset(args.data_root, "train", train=True, **common)
+        te_ds = UnpairedFolderDataset(args.data_root, "test", train=False, **common)
     # Two independent loaders -> unpaired sampling of T1 and FA.
     loader_t1 = DataLoader(tr_ds, batch_size=args.batch, shuffle=True,
                            num_workers=args.workers, drop_last=True,
@@ -126,16 +154,39 @@ def main():
                            num_workers=args.workers, drop_last=True,
                            pin_memory=True)
     print(f"train slices: {len(tr_ds)}  batches/epoch: {len(loader_t1)}", flush=True)
-    # paired val loader (test split) for early-stop SSIM
-    te_ds = PairedADNISliceDataset(te_idx, label_scheme="label_4")
     val_loader = DataLoader(te_ds, batch_size=args.batch, shuffle=False,
                             num_workers=args.workers, pin_memory=True)
 
     # --- models ---
-    G_T1toFA = init_weights(ResnetGenerator(1, 1, args.ngf, args.n_blocks)).to(device)
-    G_FAtoT1 = init_weights(ResnetGenerator(1, 1, args.ngf, args.n_blocks)).to(device)
-    D_FA = init_weights(PatchDiscriminator(1, args.ndf)).to(device)  # judges FA-domain
-    D_T1 = init_weights(PatchDiscriminator(1, args.ndf)).to(device)  # judges T1-domain
+    C = args.img_ch
+    G_T1toFA = init_weights(ResnetGenerator(C, C, args.ngf, args.n_blocks)).to(device)
+    G_FAtoT1 = init_weights(ResnetGenerator(C, C, args.ngf, args.n_blocks)).to(device)
+    D_FA = init_weights(PatchDiscriminator(C, args.ndf)).to(device)  # judges FA-domain
+    D_T1 = init_weights(PatchDiscriminator(C, args.ndf)).to(device)  # judges T1-domain
+
+    # Keep handles on the RAW modules before any wrapping.  Checkpoints must
+    # store unwrapped state dicts: every consumer downstream (MMCLASTcg.
+    # load_cyclegan, utils.eval_mnist, utils.make_figures_folder) does a
+    # strict=True load into a plain ResnetGenerator, and a "module." prefix
+    # from DataParallel would break all of them.
+    raw = {"G_T1toFA": G_T1toFA, "G_FAtoT1": G_FAtoT1,
+           "D_FA": D_FA, "D_T1": D_T1}
+    if args.dp:
+        n_gpu = torch.cuda.device_count()
+        if n_gpu < 2:
+            print(f"--dp requested but only {n_gpu} GPU visible; running single-GPU",
+                  flush=True)
+        else:
+            if args.batch % n_gpu:
+                raise SystemExit(f"--batch {args.batch} is not divisible by "
+                                 f"{n_gpu} GPUs; DataParallel would give the "
+                                 f"cards uneven work")
+            print(f"DataParallel over {n_gpu} GPUs "
+                  f"({args.batch // n_gpu} images per card)", flush=True)
+            G_T1toFA = nn.DataParallel(G_T1toFA)
+            G_FAtoT1 = nn.DataParallel(G_FAtoT1)
+            D_FA = nn.DataParallel(D_FA)
+            D_T1 = nn.DataParallel(D_T1)
 
     # --- losses ---
     crit_gan = nn.MSELoss()    # LSGAN
@@ -144,10 +195,10 @@ def main():
 
     # --- optimizers ---
     opt_G = torch.optim.Adam(
-        itertools.chain(G_T1toFA.parameters(), G_FAtoT1.parameters()),
+        itertools.chain(raw["G_T1toFA"].parameters(), raw["G_FAtoT1"].parameters()),
         lr=args.lr, betas=(0.5, 0.999))
     opt_D = torch.optim.Adam(
-        itertools.chain(D_FA.parameters(), D_T1.parameters()),
+        itertools.chain(raw["D_FA"].parameters(), raw["D_T1"].parameters()),
         lr=args.lr, betas=(0.5, 0.999))
 
     def lr_lambda(epoch):
@@ -255,10 +306,10 @@ def main():
         # checkpointing
         def save_ckpt(name):
             torch.save({
-                "G_T1toFA": G_T1toFA.state_dict(),
-                "G_FAtoT1": G_FAtoT1.state_dict(),
-                "D_FA": D_FA.state_dict(),
-                "D_T1": D_T1.state_dict(),
+                "G_T1toFA": raw["G_T1toFA"].state_dict(),
+                "G_FAtoT1": raw["G_FAtoT1"].state_dict(),
+                "D_FA": raw["D_FA"].state_dict(),
+                "D_T1": raw["D_T1"].state_dict(),
                 "args": vars(args),
                 "epoch": epoch + 1,
             }, os.path.join(RESULTS, name))
@@ -272,11 +323,35 @@ def main():
         # LR-decay schedule (the GAN's generator loss is not a quality signal).
 
     log_f.close()
+    G_T1toFA, G_FAtoT1 = raw["G_T1toFA"], raw["G_FAtoT1"]
+    G_T1toFA.eval(); G_FAtoT1.eval()
+
+    if args.data == "folder":
+        # No ground-truth pairing: score the two directions distributionally.
+        # The reference side is the TRAIN split of the target domain, which is
+        # the usual horse2zebra protocol and gives the reference a sample size
+        # the 120-image test split cannot.
+        import numpy as _np
+        from utils import fid as _fid
+        from data.unpaired_dataset import list_images as _ls
+        R = args.data_root
+        cdir = os.path.join(RESULTS, "fid_cache")
+        kw = dict(crop=args.crop_size, img_ch=args.img_ch, batch=16)
+        f_ab = _fid.fid_against(_ls(f"{R}/testA"), G_T1toFA, _ls(f"{R}/trainB"),
+                                device, os.path.join(cdir, "trainB.npz"), **kw)
+        f_ba = _fid.fid_against(_ls(f"{R}/testB"), G_FAtoT1, _ls(f"{R}/trainA"),
+                                device, os.path.join(cdir, "trainA.npz"), **kw)
+        with open(os.path.join(RESULTS, "final_eval.txt"), "w") as f:
+            f.write(f"FINAL (ep{args.epochs})  data={R}\n"
+                    f"FID A->B {f_ab:.2f}\nFID B->A {f_ba:.2f}\n")
+        print(f"training done (full schedule). FID A→B {f_ab:.2f}  B→A {f_ba:.2f} "
+              f"-> {RESULTS}/final_eval.txt", flush=True)
+        return
+
     # faithful final-model eval on the FULL test set (one-shot translation)
     import numpy as _np
     from skimage.metrics import structural_similarity as _ssim
     from skimage.metrics import peak_signal_noise_ratio as _psnr
-    G_T1toFA.eval(); G_FAtoT1.eval()
     sAB, sBA, pAB, pBA = [], [], [], []
     with torch.no_grad():
         for t1, fa, _ in val_loader:

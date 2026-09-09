@@ -197,11 +197,13 @@ mmclast-cg/
 ├── eval.py                 cross-subject u-shuffle probe + both SSIM floors
 │
 ├── configs/                hyperparameters and launch scripts
-│   ├── base.yaml  latcyc.yaml  morph.yaml
+│   ├── base.yaml  latcyc.yaml  morph.yaml  morph_bi.yaml
 │   ├── _env.sh             sourced by every script: repo root, conda env, GPU
-│   ├── run_base.sh  run_latcyc.sh  run_morph.sh  run_host.sh
+│   ├── run_base.sh  run_latcyc.sh  run_morph.sh  run_morph_bi.sh  run_host.sh
 │   ├── check_init.sh       the attribution check — run this first
 │   ├── run_all.sh          all three variants, then the figures
+│   ├── run_s3_ablation.sh  shared S1+S2, S3 is the only difference
+│   ├── run_path_search.sh  three ways out of the D_mix problem
 │   └── make_figures.sh     probe + every plot
 │
 ├── data/
@@ -224,14 +226,29 @@ mmclast-cg/
 │   ├── image.py            to_pm1 / to_01 / ssim — the shared conventions
 │   ├── pool.py             CycleGAN's ImagePool
 │   ├── config.py           YAML under argparse, with the precedence rules
-│   ├── plot_morph.py       figs 30, 31
-│   └── plot_ablation.py    fig 32
+│   ├── plot_morph.py       figs 30 (a2b), 31, 33 (b2a)
+│   └── plot_ablation.py    figs 32, 34, 35  (--direction, --out)
 │
-├── snapshot_results/       the figures, committed — the point of the repo
-├── checkpoints/<tag>/      gitignored — weights, final_eval.txt, probe_eval.txt
-│   └── host/               the CycleGAN checkpoint train.py splits
-└── logs/<tag>/             gitignored — train_log.csv (per epoch) + train.log
+└── exps/                   ALL run output.  gitignored in full — nothing here
+    │                       ships with the repo; regenerate it from configs/.
+    │                       Relocate the whole tree with $MMCLAST_EXPS.
+    ├── checkpoints/<tag>/  weights, final_eval.txt, probe_eval.txt
+    │   └── host/           the CycleGAN checkpoint train.py splits
+    ├── logs/<tag>/         train_log.csv (per epoch) + train.log (stdout)
+    └── snapshot_results/   the figures
 ```
+
+**Figure naming.** Every direction-dependent figure carries its direction in the
+filename: `..._a2b_...` is T1 → FA (walk `f` forward), `..._b2a_...` is FA → T1
+(walk `f` backward). Fig 30/33 are the per-run morphs, 31 is self-vs-cross, and
+32/34/35 are ablations across several runs.
+
+> The figures are **not** committed. A fresh clone therefore has no results to
+> look at and, because the ADNI cache and the checkpoints are also gitignored,
+> no way to regenerate them without the data. If you want the figures to travel
+> with the repo, drop `exps/` from `.gitignore` and `git add -f
+> exps/snapshot_results/` — 4 MB for the one thing a reader can understand
+> without running anything.
 
 `train_host.py` is here because it is the *host initialisation*, not because it
 is a baseline for comparison: `check_init.sh` needs its checkpoint to show that
@@ -307,14 +324,14 @@ bash configs/make_figures.sh
 ```
 
 Roughly 12 h per variant on a single A6000 at the default schedule
-(S1 120 ep / S2 80 / S3 120, batch 8). Every script tees to `logs/<tag>/train.log`.
+(S1 120 ep / S2 80 / S3 120, batch 8). Every script tees to `exps/logs/<tag>/train.log`.
 
 ### Knobs worth knowing
 
 | key | default | |
 |---|---|---|
 | `variant` | `morph` | `base` / `latcyc` / `morph`; pins the three weights below |
-| `warm` | `checkpoints/host/last.pth` | CycleGAN checkpoint to split; `""` trains from scratch |
+| `warm` | `exps/checkpoints/host/last.pth` | CycleGAN checkpoint to split; `""` trains from scratch |
 | `z_lo` / `z_hi` | 40 / 49 | axial band; see `build_cache --report` |
 | `n_flow` | 4 | flow blocks — also the number of morph frames |
 | `pre_relu` | 1 | tap the bottleneck *before* `down`'s last ReLU. Leave on: otherwise `feat ≥ 0`, and a non-negative code cannot host a signed flow output |

@@ -4,7 +4,7 @@
 
 Two figures:
 
-  30_mmclast_cg_morph_<tag>.png    every block state of f decoded by BOTH
+  30_mmclast_cg_morph_a2b_<tag>.png  every block state of f decoded by BOTH
                                    decoders (T1 view dissolving / FA view
                                    emerging).  Rows alternate D_A / D_B.
   31_mmclast_cg_selfcross_<tag>.png  self-recon vs cross-recon side by side,
@@ -50,7 +50,7 @@ def load(tag):
     ck = torch.load(p, map_location=DEV)
     a = ck["args"]
     m = MMCLASTcg(a["ngf"], a["n_blocks"], a["n_flow"], a["flow_hidden"],
-                  bool(a["pre_relu"])).to(DEV)
+                  bool(a["pre_relu"]), img_ch=a.get("img_ch", 1)).to(DEV)
     m.load_state_dict(ck["model"]); m.eval()
     return m, a
 
@@ -119,8 +119,10 @@ def fig_morph(m, ds, slices, tag, direction="a2b"):
     fig.suptitle(f"MMCLAST-cg ({tag}) — native path morph, "
                  f"{'T1 → FA' if fwd else 'FA → T1'}\n{sub}", fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    name = (f"30_mmclast_cg_morph_{tag}.png" if fwd else
-            f"33_mmclast_cg_morph_b2a_{tag}.png")
+    # The direction goes IN the filename.  It used to be implicit for a2b
+    # (fig 30) and explicit for b2a (fig 33), which reads as "the forward one is
+    # missing" when you scan the directory.
+    name = f"3{0 if fwd else 3}_mmclast_cg_morph_{'a2b' if fwd else 'b2a'}_{tag}.png"
     out = os.path.join(FIGS, name)
     fig.savefig(out, dpi=140, bbox_inches="tight"); plt.close(fig)
     print("saved", out)

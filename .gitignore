@@ -32,6 +32,7 @@ __X_files/
 # the paper and its LaTeX intermediates
 paper_writing/
 exps/
+pytorch-CycleGAN-and-pix2pix/
 
 # --- python ----------------------------------------------------------------
 __pycache__/

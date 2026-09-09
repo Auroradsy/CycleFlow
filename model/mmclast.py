@@ -81,13 +81,15 @@ class Decoder(nn.Module):
 class MMCLASTcg(nn.Module):
     """Two encoder/decoder pairs from CycleGAN, bridged by ONE dense conv flow."""
 
-    def __init__(self, ngf=64, n_blocks=6, n_flow=4, flow_hidden=128, pre_relu=True):
+    def __init__(self, ngf=64, n_blocks=6, n_flow=4, flow_hidden=128, pre_relu=True,
+                 img_ch=1):
         super().__init__()
         ch = ngf * 4
-        self.enc_A = init_weights(Encoder(1, ngf, pre_relu))
-        self.enc_B = init_weights(Encoder(1, ngf, pre_relu))
-        self.dec_A = init_weights(Decoder(1, ngf, n_blocks))
-        self.dec_B = init_weights(Decoder(1, ngf, n_blocks))
+        self.img_ch = img_ch
+        self.enc_A = init_weights(Encoder(img_ch, ngf, pre_relu))
+        self.enc_B = init_weights(Encoder(img_ch, ngf, pre_relu))
+        self.dec_A = init_weights(Decoder(img_ch, ngf, n_blocks))
+        self.dec_B = init_weights(Decoder(img_ch, ngf, n_blocks))
         # NOTE: init_weights must NOT touch the flow — it would overwrite the
         # zero-init that makes f the exact identity at step 0.
         self.flow = SpatialFlow(n_flow, ch, flow_hidden)
@@ -166,17 +168,23 @@ class MMCLASTcg(nn.Module):
                       (u_B.flatten(1).norm(dim=1) + 1e-8)).mean())
 
 
-def make_discriminators(ndf=64, mix=False):
+def make_discriminators(ndf=64, mix=False, mix_b=False, img_ch=1):
     """D_FA / D_T1 (host, unchanged) and optionally D_mix for the morph path.
 
     D_mix is trained on real T1 UNION real FA, so "realistic" for it means
     "a real brain slice of either modality" — exactly the supervision an
     intermediate flow state needs, and it requires no ground-truth mid-frames.
     """
-    d = {"FA": init_weights(PatchDiscriminator(1, ndf)),
-         "T1": init_weights(PatchDiscriminator(1, ndf))}
+    d = {"FA": init_weights(PatchDiscriminator(img_ch, ndf)),
+         "T1": init_weights(PatchDiscriminator(img_ch, ndf))}
     if mix:
-        d["mix"] = init_weights(PatchDiscriminator(1, ndf))
+        d["mix"] = init_weights(PatchDiscriminator(img_ch, ndf))
+    if mix_b:
+        # A second critic for the B->A leg.  Sharing one critic across both
+        # legs makes the generator satisfy two OPPOSITE endpoint targets at
+        # once, and the cheapest joint solution is a path that barely moves
+        # (measured: forward 0.183 -> 0.042, backward 0.120 -> 0.023).
+        d["mix_b"] = init_weights(PatchDiscriminator(img_ch, ndf))
     return d
 
 
