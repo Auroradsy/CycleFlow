@@ -122,14 +122,14 @@ def _boost_hotspots(x, label, weight):
     return np.clip(x * (1 + blob * stroke.astype(np.float32) * weight), 0, 1)
 
 
-def _pet_intensity(x, rng):
+def _pet_intensity(x, rng, noise=0.05):
     """PSF blur + SUV-style display curve + acquisition noise.  The +0.12 lift
     is what makes the PET background non-black, which is most of the visible
     domain gap against raw MNIST."""
     x = gaussian_filter(x, sigma=1.2)
     x = np.clip(x, 0, 1) ** 2.2
     x = np.clip(x * 1.15 + 0.12, 0, 1)
-    return np.clip(x + rng.normal(0, 0.05, x.shape), 0, 1).astype(np.float32)
+    return np.clip(x + rng.normal(0, noise, x.shape), 0, 1).astype(np.float32)
 
 
 def render_ct(x28, rng):
@@ -137,8 +137,8 @@ def render_ct(x28, rng):
     return np.stack([x28] * 3, -1)
 
 
-def render_pet(x28, label, rng, weight):
-    g = _pet_intensity(_boost_hotspots(x28, label, weight), rng)
+def render_pet(x28, label, rng, weight, noise=0.05):
+    g = _pet_intensity(_boost_hotspots(x28, label, weight), rng, noise)
     rgb = np.zeros((*g.shape, 3), np.float32)
     rgb[..., 1] = g                      # pure-green tint, R=B=0
     return rgb
@@ -167,7 +167,7 @@ def balanced_indices(labels, per_class, offset=0):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mnist_raw", default=os.path.normpath(_DEFAULT_MNIST))
-    ap.add_argument("--out", default="/home/siyuan/datasets/mnist_petct")
+    ap.add_argument("--out", default="/ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct")
     ap.add_argument("--size", type=int, default=64,
                     help="output resolution; the pipeline always runs at 28")
     ap.add_argument("--n_train", type=int, default=12000,
@@ -175,6 +175,9 @@ def main():
     ap.add_argument("--n_test", type=int, default=5000,
                     help="per domain; A and B use the SAME indices (paired)")
     ap.add_argument("--hotspot_weight", type=float, default=0.8)
+    ap.add_argument("--pet_noise", type=float, default=0.05,
+                    help="std of the additive Gaussian acquisition noise on PET "
+                         "(after the display curve, in [0,1] intensity units)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--paired_train", action="store_true",
                     help="give trainB the SAME indices as trainA, so every CT "
@@ -221,7 +224,7 @@ def main():
         for k, i in enumerate(ii):
             x = X[i].astype(np.float32) / 255.0
             img = (render_ct(x, rng) if dom == "A"
-                   else render_pet(x, Y[i], rng, a.hotspot_weight))
+                   else render_pet(x, Y[i], rng, a.hotspot_weight, a.pet_noise))
             # filename carries the source index, so testA/testB line up by name
             save(img, os.path.join(d, f"{i:06d}_d{Y[i]}.png"), a.size)
         print(f"{split}{dom}: {len(ii)} -> {d}")
@@ -234,7 +237,7 @@ def main():
         rng = np.random.RandomState(a.seed + 1 + 100)
         for i in idx[("test", "B")]:
             x = te_x[i].astype(np.float32) / 255.0
-            save(render_pet(x, te_y[i], rng, 0.0),
+            save(render_pet(x, te_y[i], rng, 0.0, a.pet_noise),
                  os.path.join(d, f"{i:06d}_d{te_y[i]}.png"), a.size)
         print(f"testB_nohot: {len(idx[('test', 'B')])} -> {d}")
 

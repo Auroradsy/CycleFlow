@@ -20,7 +20,7 @@ tag: mnist_p_latcyc
 # data ---------------------------------------------------------------------
 data: folder
 pair: true                # A[i] and B[i] are the same sample; asserted at load
-data_root: /home/siyuan/datasets/mnist_petct_paired
+data_root: /ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct_paired
 img_ch: 3
 load_size: 72             # resize, then random-crop to 64 -- the SAME crop and
 crop_size: 64             # flip are applied to both members of a pair

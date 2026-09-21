@@ -9,10 +9,10 @@ import nibabel as nib
 from nilearn.image import resample_to_img
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-B    = "/data_new3/nfs_share/public/Imaging_genetic"
+B    = os.environ["ADNI_RAW_ROOT"]
 SRC  = f"{B}/registered_DTI"
 OUT  = f"{B}/registrated_DTI_2mm"
-MNI2 = "/usr/local/fsl/data/standard/MNI152_T1_2mm.nii.gz"
+MNI2 = os.path.join(os.environ.get("FSLDIR", "/usr/local/fsl"), "data/standard/MNI152_T1_2mm.nii.gz")
 SCALARS = ["FA", "MD", "RD", "AD"]
 N_WORKERS = 12
 

@@ -36,7 +36,8 @@ from model.backbone import ResnetGenerator                                     #
 from utils.image import to_pm1, to_01                                          # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 OUT = os.path.join(EXPS, "snapshot_results")
 

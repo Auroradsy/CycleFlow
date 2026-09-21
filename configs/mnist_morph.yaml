@@ -10,7 +10,7 @@ tag: mnist_morph
 
 # data ---------------------------------------------------------------------
 data: folder
-data_root: /home/siyuan/datasets/mnist_petct
+data_root: /ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct
 img_ch: 3
 load_size: 72
 crop_size: 64

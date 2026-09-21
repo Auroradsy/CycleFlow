@@ -63,7 +63,8 @@ from utils.config import parse_with_config                               # noqa:
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Everything a run produces lives under exps/ (gitignored).  Override the whole
 # tree with MMCLAST_EXPS to keep several experiment sets side by side.
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 LOGS = os.path.join(EXPS, "logs")
 CFM_T1FA, CFM_FAT1 = 0.729, 0.790          # best baseline, RECON_RESULTS.md §1
@@ -226,7 +227,7 @@ def main():
     ap.add_argument("--variant", choices=["base", "latcyc", "morph", "morph_bi"],
                     default="morph")
     ap.add_argument("--tag", default=None)
-    ap.add_argument("--warm", default=os.path.join(CKPT, "host", "last.pth"),
+    ap.add_argument("--warm", default=str(checkpoint_root() / "host" / "last.pth"),
                     help="plain-CycleGAN checkpoint to split into E/D ('' = from scratch)")
     # data
     ap.add_argument("--z_lo", type=int, default=40, help="axial band low, inclusive")
@@ -307,7 +308,10 @@ def main():
     # A config may give `warm` as a repo-relative path; resolve it here so the
     # script works from any working directory, not just the repo root.
     if a.warm and not os.path.isabs(a.warm):
-        a.warm = os.path.join(_HERE, a.warm)
+        from server_paths import resolve_checkpoint
+        a.warm = resolve_checkpoint(a.warm)
+        if not os.path.isabs(a.warm):
+            a.warm = os.path.join(_HERE, a.warm)
 
     if a.variant == "base":
         a.w_latcyc = 0.0; a.w_path_gan = 0.0; a.w_path_smooth = 0.0; a.path_bidir = 0
@@ -420,7 +424,8 @@ def main():
         D[k] = D[k].to(DEV)
 
     if a.resume_stage:
-        src = a.resume_from or os.path.join(RESULTS, f"stage{a.resume_stage}.pth")
+        from server_paths import resolve_checkpoint, previous_checkpoint
+        src = resolve_checkpoint(a.resume_from) if a.resume_from else previous_checkpoint(a.resume_stage)
         if not os.path.isabs(src):
             src = os.path.join(_HERE, src)
         ck = torch.load(src, map_location=DEV)

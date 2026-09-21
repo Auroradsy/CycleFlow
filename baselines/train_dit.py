@@ -13,7 +13,7 @@ latent, and sampled with classifier-free guidance.
 Three phases, all logged:  latent AE  ->  two DiTs  ->  CFG sampling + scoring.
 
   python -m baselines.train_dit --tag dit_mnist --data folder \
-      --data_root /home/siyuan/datasets/mnist_petct_paired
+      --data_root /ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct_paired
   python -m baselines.train_dit --tag dit_adni_scratch --data adni
 """
 import argparse
@@ -39,7 +39,8 @@ from baselines.latent_ae import LatentAE                                     # n
 from baselines.nets_dit import DiT                                           # noqa: E402
 from baselines.diffusion_iddpm import IDDPM                                  # noqa: E402
 
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 
 
 def train_latent_ae(tl, n_ch, dev, epochs, lr, kl_w, res):

@@ -57,7 +57,8 @@ from model.backbone import ResnetGenerator                               # noqa:
 from utils import fid as F                                               # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 # Set by main() from --dataset / the individual overrides.  Module-level
 # because every figure function writes into OUT and draws at SIZE, and
@@ -70,10 +71,10 @@ PREFIX = "h2z_"
 # Per-dataset presets.  `dom` is cosmetic (titles and row labels); everything
 # else changes what is actually read and written.
 PRESETS = {
-    "h2z": dict(root="/data_new2/public_share/horse2zebra", prefix="h2z_",
+    "h2z": dict(root="/ix/lzhan/siyuan/datasets/processed_datas/horse2zebra", prefix="h2z_",
                 host="h2z_host", out="horse2zebra", size=256,
                 dom=("horse", "zebra")),
-    "mnist": dict(root="/home/siyuan/datasets/mnist_petct", prefix="mnist_",
+    "mnist": dict(root="/ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct_paired", prefix="mnist_",
                   host="mnist_host", out="mnist_petct", size=64,
                   dom=("CT", "PET")),
 }

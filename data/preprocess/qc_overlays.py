@@ -8,10 +8,10 @@ import matplotlib.pyplot as plt
 from skimage import feature
 from nilearn.image import resample_to_img
 
-B = "/data_new3/nfs_share/public/Imaging_genetic"
+B = os.environ["ADNI_RAW_ROOT"]
 TDIR = f"{B}/registrated_T1_sy"
-MNI2 = "/usr/local/fsl/data/standard/MNI152_T1_2mm.nii.gz"
-OVR  = "/home/siyuan/projects/Brain/clast_base/adni_pilot/overlays"
+MNI2 = os.path.join(os.environ.get("FSLDIR", "/usr/local/fsl"), "data/standard/MNI152_T1_2mm.nii.gz")
+OVR = os.environ.get("ADNI_QC_OUT", "/ix/lzhan/siyuan/exps/CycleFlow/adni/qc/overlays")
 
 rows = list(csv.DictReader(open(f"{TDIR}/manifest.csv")))
 rows = [r for r in rows if r["status"] == "ok"]

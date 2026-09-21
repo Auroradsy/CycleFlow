@@ -40,7 +40,8 @@ from model import MMCLASTcg                                              # noqa:
 from utils.image import to_pm1, to_01, ssim_batch                        # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 
 
@@ -135,7 +136,7 @@ def main():
           f"   (FiLM head of §3: 0.0000 = decorative latent)")
     print(f"headroom over template floor:   FA {rows[0][1]-rows[3][1]:+.4f}"
           f"   T1 {rows[0][3]-rows[3][3]:+.4f}")
-    out = os.path.join(CKPT, a.tag, "probe_eval.txt")
+    out = os.path.join(EXPS, "probe_eval.txt")
     with open(out, "w") as f:
         for la, va, _lb, vb in rows:
             f.write(f"{la}\tFA={va:.4f}\tT1={vb:.4f}\n")

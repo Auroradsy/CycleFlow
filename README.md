@@ -1,5 +1,7 @@
 # MMCLAST-cg
 
+> **当前服务器运行说明：[SERVER_SETUP.md](SERVER_SETUP.md)**。数据、环境和输出路径以该文档为准；下方历史实验中的 `exps/` 示例是旧目录布局。
+
 **A CycleGAN rewired so that a single invertible flow *is* the bridge between modalities.**
 
 Cross-modal translation between paired ADNI T1 and FA brain slices, where the two

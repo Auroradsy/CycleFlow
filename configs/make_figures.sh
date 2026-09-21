@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Everything downstream of training: the calibrated probe, then the figures.
-# Writes exps/snapshot_results/*.png and exps/checkpoints/<tag>/probe_eval.txt.
+# Each evaluation/plot invocation writes into its own timestamped directory.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
 
 for t in base latcyc morph; do
-  [ -f "exps/checkpoints/$t/model.pth" ] || { echo "skip $t (not trained)"; continue; }
+  [ -f "$MMCLAST_EXPS/adni/checkpoints/$t/model.pth" ] || { echo "skip $t (not trained)"; continue; }
   python eval.py --tag "$t"
   python -m utils.plot_morph --tag "$t"
 done

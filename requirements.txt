@@ -1,7 +1,11 @@
-# Versions this was developed and run against (CUDA 11.3, python 3.8).
-# Nothing here is version-critical except that torch must have CUDA.
-torch==1.12.0
-numpy>=1.21
-nibabel>=3.2
-scikit-image>=0.19
-matplotlib>=3.5
+# Python 3.11; CUDA torch/torchvision reused by setup_env.sh from baselines_ultra.
+torch==2.5.1
+torchvision==0.20.1
+numpy>=2,<2.3
+scipy>=1.10,<1.16
+nibabel>=5,<6
+scikit-image>=0.21,<0.26
+matplotlib>=3.7,<3.11
+PyYAML>=6,<7
+Pillow>=10,<12
+pytorch-fid==0.3.0

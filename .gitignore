@@ -33,6 +33,7 @@ __X_files/
 paper_writing/
 exps/
 pytorch-CycleGAN-and-pix2pix/
+SERVER_SETUP.md
 
 # --- python ----------------------------------------------------------------
 __pycache__/

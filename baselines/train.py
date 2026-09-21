@@ -6,6 +6,12 @@
             v(x,t) with the linear interpolant and the paired (OT) coupling;
             translation is Euler ODE integration from source to target.
             Strongest baseline on ADNI.
+  recflow   Rectified Flow (Liu et al. 2023), i.e. the same interpolant taken
+            through the paper's own procedure: fit 1-rectified flow on the
+            INDEPENDENT coupling of the two domains, simulate it to draw
+            (x0, ODE(x0)) pairs, refit on those pairs (reflow), and translate in
+            ONE Euler step.  The reflow is the whole contribution, so it is what
+            separates this row from cfm above.
   meanflow  MeanFlow (Geng et al. 2025).  Learns the AVERAGE velocity over an
             interval via the MeanFlow identity, so t=0->1 is a single forward.
   ddpm      Conditional DDPM; the source image is concatenated to the noisy
@@ -16,7 +22,7 @@ in __outdated_files/baseline/; the only thing this file changes is that the
 data source and the channel count are arguments.
 
   python -m baselines.train --method cfm --data folder \
-      --data_root /home/siyuan/datasets/mnist_petct_paired --tag cfm_mnist
+      --data_root /ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct_paired --tag cfm_mnist
 """
 import argparse
 import csv
@@ -37,7 +43,8 @@ for p in (_ROOT, _HERE):
 
 from baselines.common import loaders, evaluate, add_data_args              # noqa: E402
 
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 
 
 # --------------------------------------------------------------------------
@@ -55,6 +62,40 @@ def cfm_generate(net, x0, n_steps=10):
     for k in range(n_steps):
         x = x + dt * net(x, torch.full((x.shape[0],), k * dt, device=x.device))
     return x
+
+
+# --------------------------------------------------------------------------
+# Rectified Flow  (independent coupling, then reflow)
+# --------------------------------------------------------------------------
+def rectflow_loss(net, x0, x1):
+    """cfm_loss on the INDEPENDENT coupling: the target is a shuffled batch.
+
+    "Flow Straight and Fast" transports one data distribution to another without
+    assuming a coupling; drawing (x0, x1) from pi_0 x pi_1 is what makes the
+    reflow below a non-trivial step, because the 1-rectified flow's own transport
+    plan is the thing being rewired.  cfm above instead uses the ground-truth
+    pairing, which no unpaired method has access to.
+    """
+    return cfm_loss(net, x0, x1[torch.randperm(x1.shape[0], device=x1.device)])
+
+
+@torch.no_grad()
+def reflow_pairs(nets, loader, dev, n_steps):
+    """(x0, ODE_{v1}(x0)) for both directions, simulated once with the fitted flow.
+
+    Reflow retrains on pairs the CURRENT flow itself produces; the new coupling is
+    at least as good in transport cost and its paths are straighter, which is what
+    buys the one-step inference.  The pairs are drawn once, with a frozen v1 and a
+    fine (n_steps) solver, and then held fixed, as in the paper -- for the folder
+    datasets this also freezes a single draw of the random crop, which is the same
+    thing as treating the generated set as a dataset.
+    """
+    cols = [[], [], [], []]
+    for xa, xb, *_ in loader:
+        xa, xb = xa.to(dev, non_blocking=True), xb.to(dev, non_blocking=True)
+        cols[0].append(xa.cpu()); cols[1].append(cfm_generate(nets[0], xa, n_steps).cpu())
+        cols[2].append(xb.cpu()); cols[3].append(cfm_generate(nets[1], xb, n_steps).cpu())
+    return torch.utils.data.TensorDataset(*[torch.cat(c) for c in cols])
 
 
 # --------------------------------------------------------------------------
@@ -113,7 +154,7 @@ def ddpm_generate(net, diff, x, n_steps):
 
 # --------------------------------------------------------------------------
 def build(method, n_ch, base, device):
-    if method == "cfm":
+    if method in ("cfm", "recflow"):
         from baselines.nets_cfm import VelocityUNet
         return (VelocityUNet(in_ch=n_ch, base=base).to(device),
                 VelocityUNet(in_ch=n_ch, base=base).to(device), None)
@@ -128,21 +169,70 @@ def build(method, n_ch, base, device):
             Diffusion(T=1000, device=device))
 
 
+def train_stage(a, nets, loader, step, gen, epochs, stage, el, dev, w, save):
+    """One cosine-annealed run over `loader`; the only loop any method uses.
+
+    `step(nets, batch) -> loss` owns the device transfer and the objective, so a
+    stage that trains on generated pairs differs from a stage that trains on the
+    data only in that function.
+    """
+    opt = torch.optim.AdamW(list(nets[0].parameters()) + list(nets[1].parameters()),
+                            lr=a.lr, weight_decay=1e-4)
+    sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    for ep in range(1, epochs + 1):
+        nets[0].train(); nets[1].train()
+        t0, run, nb = time.time(), 0.0, 0
+        for batch in loader:
+            loss = step(nets, batch)
+            opt.zero_grad(set_to_none=True); loss.backward()
+            if a.method == "ddpm":       # as in the original DDPM script
+                torch.nn.utils.clip_grad_norm_(
+                    list(nets[0].parameters()) + list(nets[1].parameters()), 1.0)
+            opt.step()
+            run += loss.item(); nb += 1
+        sch.step()
+        tr = run / max(nb, 1)
+
+        sa = sb = float("nan")
+        if ep % a.eval_every == 0 or ep == epochs:
+            nets[0].eval(); nets[1].eval()
+            r = evaluate(lambda x: gen(nets[0], x), lambda x: gen(nets[1], x),
+                         el, dev, max_batches=8)
+            sa, sb = r["ssim_A2B"], r["ssim_B2A"]
+        sec = time.time() - t0
+        w.writerow([stage, ep, f"{tr:.6f}", f"{sa:.4f}", f"{sb:.4f}",
+                    f"{opt.param_groups[0]['lr']:.2e}", f"{sec:.1f}"])
+        print(f"[stage {stage}] ep {ep:3d}  loss {tr:.5f}  ssim A→B {sa:.4f} B→A {sb:.4f}  "
+              f"{sec:.1f}s", flush=True)
+        save(stage, ep)
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--method", required=True, choices=["cfm", "meanflow", "ddpm"])
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--method", required=True, choices=["cfm", "recflow", "meanflow", "ddpm"])
     ap.add_argument("--tag", required=True)
     ap.add_argument("--epochs", type=int, default=120)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--base", type=int, default=64)
     ap.add_argument("--n_steps", type=int, default=10, help="CFM Euler / DDIM steps")
+    ap.add_argument("--reflow_epochs", type=int, default=0,
+                    help="recflow: epochs of the second (reflowed) stage; 0 = --epochs")
+    ap.add_argument("--reflow_sim_steps", type=int, default=100,
+                    help="recflow: Euler steps used to SIMULATE the pairs the reflow trains on")
+    ap.add_argument("--coupling", default="independent", choices=["independent", "paired"],
+                    help="recflow: the coupling of the first stage; the paper's is independent")
     ap.add_argument("--eval_every", type=int, default=5)
     ap.add_argument("--seed", type=int, default=42)
     add_data_args(ap)
     a = ap.parse_args()
     if a.data == "folder" and not a.data_root:
         ap.error("--data folder requires --data_root")
+    # RecFlow's claim is that the reflowed field is straight enough for ONE step;
+    # the shared default (10) is CFM's, so override it unless it was given.
+    if a.method == "recflow" and not any(s.split("=")[0] == "--n_steps" for s in sys.argv[1:]):
+        a.n_steps = 1
 
     torch.manual_seed(a.seed); np.random.seed(a.seed)
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -156,12 +246,8 @@ def main():
     print(f"{len(tl.dataset)} train / {len(el.dataset)} test  |  "
           f"{n_ch}ch  |  params/net {npar/1e6:.2f}M", flush=True)
 
-    opt = torch.optim.AdamW(list(net_ab.parameters()) + list(net_ba.parameters()),
-                            lr=a.lr, weight_decay=1e-4)
-    sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=a.epochs)
-
-    if a.method == "cfm":
-        loss_fn = cfm_loss
+    if a.method in ("cfm", "recflow"):
+        loss_fn = cfm_loss if a.method == "cfm" or a.coupling == "paired" else rectflow_loss
         gen = lambda net, x: cfm_generate(net, x, a.n_steps)
     elif a.method == "meanflow":
         loss_fn = meanflow_loss
@@ -170,38 +256,48 @@ def main():
         loss_fn = lambda net, x0, x1: ddpm_loss(net, diff, x0, x1)
         gen = lambda net, x: ddpm_generate(net, diff, x, a.n_steps)
 
+    def data_step(nets, batch):
+        xa = batch[0].to(dev, non_blocking=True)
+        xb = batch[1].to(dev, non_blocking=True)
+        return loss_fn(nets[0], xa, xb) + loss_fn(nets[1], xb, xa)
+
     f = open(os.path.join(RES, "train_log.csv"), "w", newline="")
     w = csv.writer(f)
-    w.writerow(["epoch", "loss", "ssim_A2B", "ssim_B2A", "lr", "sec"])
+    w.writerow(["stage", "epoch", "loss", "ssim_A2B", "ssim_B2A", "lr", "sec"])
+    state = {}
 
-    for ep in range(1, a.epochs + 1):
-        net_ab.train(); net_ba.train()
-        t0, run, nb = time.time(), 0.0, 0
-        for xa, xb, _y in tl:
-            xa, xb = xa.to(dev, non_blocking=True), xb.to(dev, non_blocking=True)
-            loss = loss_fn(net_ab, xa, xb) + loss_fn(net_ba, xb, xa)
-            opt.zero_grad(set_to_none=True); loss.backward()
-            if a.method == "ddpm":       # as in the original DDPM script
-                torch.nn.utils.clip_grad_norm_(
-                    list(net_ab.parameters()) + list(net_ba.parameters()), 1.0)
-            opt.step()
-            run += loss.item(); nb += 1
-        sch.step()
-        tr = run / max(nb, 1)
+    def save(stage, ep):
+        f.flush()
+        # Stage 1 of recflow is the 1-rectified flow; the reported model is the
+        # reflowed one, so the keys the readers use (net_ab/net_ba) always name
+        # the latest stage and the earlier flow is kept beside it.
+        keys = ("net_ab_1rf", "net_ba_1rf") if a.method == "recflow" and stage == 1 \
+            else ("net_ab", "net_ba")
+        state.update({keys[0]: net_ab.state_dict(), keys[1]: net_ba.state_dict(),
+                      "epoch": ep, "stage": stage, "args": vars(a)})
+        torch.save(state, os.path.join(RES, "last.pth"))
 
-        sa = sb = float("nan")
-        if ep % a.eval_every == 0 or ep == a.epochs:
-            net_ab.eval(); net_ba.eval()
-            r = evaluate(lambda x: gen(net_ab, x), lambda x: gen(net_ba, x),
-                         el, dev, max_batches=8)
-            sa, sb = r["ssim_A2B"], r["ssim_B2A"]
-        sec = time.time() - t0
-        w.writerow([ep, f"{tr:.6f}", f"{sa:.4f}", f"{sb:.4f}",
-                    f"{opt.param_groups[0]['lr']:.2e}", f"{sec:.1f}"]); f.flush()
-        print(f"ep {ep:3d}  loss {tr:.5f}  ssim A→B {sa:.4f} B→A {sb:.4f}  "
-              f"{sec:.1f}s", flush=True)
-        torch.save({"epoch": ep, "args": vars(a), "net_ab": net_ab.state_dict(),
-                    "net_ba": net_ba.state_dict()}, os.path.join(RES, "last.pth"))
+    train_stage(a, (net_ab, net_ba), tl, data_step, gen, a.epochs, 1, el, dev, w, save)
+
+    if a.method == "recflow":
+        t0 = time.time()
+        net_ab.eval(); net_ba.eval()
+        pairs = reflow_pairs((net_ab, net_ba), tl, dev, a.reflow_sim_steps)
+        print(f"reflow: {len(pairs)} generated pairs per direction, "
+              f"{a.reflow_sim_steps} Euler steps ({time.time() - t0:.0f}s)", flush=True)
+        # The 1-rectified flow is frozen; the second flow starts from scratch, as
+        # the paper's reflow does (it refits, it does not fine-tune).
+        state["reflow_pairs"] = len(pairs)
+        net_ab, net_ba, _ = build(a.method, n_ch, a.base, dev)
+        pl = torch.utils.data.DataLoader(pairs, batch_size=a.batch, shuffle=True,
+                                         drop_last=True, pin_memory=True)
+
+        def reflow_step(nets, batch):
+            t = [x.to(dev, non_blocking=True) for x in batch]
+            return cfm_loss(nets[0], t[0], t[1]) + cfm_loss(nets[1], t[2], t[3])
+
+        train_stage(a, (net_ab, net_ba), pl, reflow_step, gen,
+                    a.reflow_epochs or a.epochs, 2, el, dev, w, save)
     f.close()
 
     # FAITHFUL: fixed schedule, no early stop, report the FINAL model -- the
@@ -212,6 +308,14 @@ def main():
            f"params_per_net={npar}\n"
            f"ssim_A2B={r['ssim_A2B']:.4f}\npsnr_A2B={r['psnr_A2B']:.2f}\n"
            f"ssim_B2A={r['ssim_B2A']:.4f}\npsnr_B2A={r['psnr_B2A']:.2f}\n")
+    if a.method == "recflow":
+        # The straightening is the claim; report what it buys at each step count.
+        txt += f"coupling={a.coupling}\nreflow_sim_steps={a.reflow_sim_steps}\nn_steps={a.n_steps}\n"
+        for k in (1, 2, 10):
+            rk = evaluate(lambda x: cfm_generate(net_ab, x, k),
+                          lambda x: cfm_generate(net_ba, x, k), el, dev)
+            txt += (f"steps={k}: ssim_A2B={rk['ssim_A2B']:.4f} psnr_A2B={rk['psnr_A2B']:.2f} "
+                    f"ssim_B2A={rk['ssim_B2A']:.4f} psnr_B2A={rk['psnr_B2A']:.2f}\n")
     open(os.path.join(RES, "final_eval.txt"), "w").write(txt)
     print("\n" + txt, flush=True)
 

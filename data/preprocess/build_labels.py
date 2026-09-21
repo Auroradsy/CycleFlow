@@ -11,9 +11,9 @@ Output: adni_pilot/labels.csv  with columns:
 """
 import json, csv, collections, os
 
-SRC = "/data_new3/nfs_share/kunzhao/TinyLLaVA_Factory-main/dataset/genetic_image/all_infomation_v2.json"
-OUR = "/data_new3/nfs_share/public/Imaging_genetic/registrated_T1_sy/manifest.csv"
-OUT = "/home/siyuan/projects/Brain/clast_base/adni_pilot/labels.csv"
+SRC = os.environ["ADNI_LABEL_SOURCE"]
+OUR = os.path.join(os.environ["ADNI_RAW_ROOT"], "registrated_T1_sy", "manifest.csv")
+OUT = os.environ.get("ADNI_LABELS", "/ix/lzhan/siyuan/datasets/processed_datas/ADNI_CycleFlow/labels.csv")
 
 LABEL_RE = "The subject is "
 MAP_6 = {"CN":"CN","SMC":"SMC","EMCI":"EMCI","MCI":"MCI","LMCI":"LMCI","AD":"AD"}

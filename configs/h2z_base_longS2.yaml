@@ -36,7 +36,7 @@ tag: h2z_base_longS2
 
 # data ---------------------------------------------------------------------
 data: folder
-data_root: /data_new2/public_share/horse2zebra
+data_root: /ix/lzhan/siyuan/datasets/processed_datas/horse2zebra
 img_ch: 3
 load_size: 286
 crop_size: 256

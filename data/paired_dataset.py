@@ -22,11 +22,11 @@ from torch.utils.data import Dataset
 # Where the MNI-registered volumes live.  ADNI is not redistributable, so these
 # point at your own copy; override with the environment variables.
 _D = os.path.dirname(os.path.abspath(__file__))
-B    = os.environ.get("ADNI_ROOT", "/data_new3/nfs_share/public/Imaging_genetic")
+B    = os.environ.get("ADNI_ROOT", "/ix/lzhan/siyuan/datasets/processed_datas/ADNI_CycleFlow")
 T1D  = os.environ.get("ADNI_T1_DIR", f"{B}/registrated_T1_sy")
 FAD  = os.environ.get("ADNI_FA_DIR", f"{B}/registrated_DTI_2mm_sy")
-CACHE      = os.environ.get("ADNI_CACHE",  os.path.join(_D, "cache", "paired_112.pt"))
-LABELS_CSV = os.environ.get("ADNI_LABELS", os.path.join(_D, "labels.csv"))
+CACHE      = os.environ.get("ADNI_CACHE",  os.path.join(B, "paired_112.pt"))
+LABELS_CSV = os.environ.get("ADNI_LABELS", os.path.join(B, "labels.csv"))
 
 # label-scheme -> int mapping (training is unsupervised; labels are for eval only).
 # Any subject whose label is NOT in this map will get -1 and is filtered out
@@ -93,8 +93,15 @@ def load_subject_labels(scheme: str = "label_2"):
 
 
 class PairedADNISliceDataset(Dataset):
-    """Returns (T1, FA, label)."""
-    def __init__(self, indices=None, label_scheme: str = "label_2"):
+    """Returns (T1, FA, label).
+
+    Sensitivity analysis: `fa_noise` (default: env ADNI_FA_NOISE, else 0) adds Gaussian
+    noise of that std to the FA inside the brain mask, clipped to [0,1]. The draw is
+    fixed per slice -- seeded by its cache index and `noise_seed` (env
+    ADNI_FA_NOISE_SEED, else 0) -- so, like one acquisition, every epoch, split and
+    evaluation sees the same noisy FA. A different noise_seed gives an independent
+    re-acquisition of the same slice."""
+    def __init__(self, indices=None, label_scheme: str = "label_2", fa_noise=None, noise_seed=None):
         d = torch.load(CACHE, map_location="cpu")
         self.T1, self.FA = d["T1"], d["FA"]
         self.subj_idx, self.z_idx = d["subj_idx"], d["z_idx"]
@@ -103,11 +110,18 @@ class PairedADNISliceDataset(Dataset):
         subj2lbl = load_subject_labels(label_scheme)
         self.labels = torch.tensor([subj2lbl.get(self.subjects[int(s)], -1)
                                     for s in self.subj_idx], dtype=torch.long)
+        self.fa_noise = float(os.environ.get("ADNI_FA_NOISE", 0)) if fa_noise is None else float(fa_noise)
+        self.noise_seed = int(os.environ.get("ADNI_FA_NOISE_SEED", 0)) if noise_seed is None else int(noise_seed)
 
     def __len__(self): return len(self.indices)
     def __getitem__(self, i):
         k = int(self.indices[i])
-        return self.T1[k], self.FA[k], int(self.labels[k])
+        t1, fa = self.T1[k], self.FA[k]
+        if self.fa_noise > 0:
+            g = torch.Generator().manual_seed(self.noise_seed * 1_000_003 + k)
+            brain = ((t1 > 0) | (fa > 0)).float()
+            fa = (fa + torch.randn(fa.shape, generator=g) * self.fa_noise * brain).clamp(0, 1)
+        return t1, fa, int(self.labels[k])
 
 
 class SingleModalSliceDataset(Dataset):

@@ -21,7 +21,7 @@ tag: mnist_base
 
 # data ---------------------------------------------------------------------
 data: folder
-data_root: /home/siyuan/datasets/mnist_petct
+data_root: /ix/lzhan/siyuan/datasets/processed_datas/MNIST_CycleFlow/mnist_petct
 img_ch: 3
 load_size: 72             # resize, then random-crop to 64 (CycleGAN recipe)
 crop_size: 64

@@ -46,7 +46,8 @@ from model.backbone import ResnetGenerator                               # noqa:
 from utils.image import to_pm1, to_01                                    # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 OUT = os.path.join(EXPS, "snapshot_results", "horse2zebra")
 
@@ -82,7 +83,7 @@ def _host_n_blocks(ck, default):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default="/data_new2/public_share/horse2zebra")
+    ap.add_argument("--root", default="/ix/lzhan/siyuan/datasets/processed_datas/horse2zebra")
     ap.add_argument("--warm", default=os.path.join(CKPT, "h2z_host", "last.pth"))
     ap.add_argument("--tags", nargs="*", default=None)
     ap.add_argument("--batch", type=int, default=8)

@@ -40,10 +40,10 @@ from model import ResnetGenerator, PatchDiscriminator, init_weights
 
 # The host's weights are what train.py splits into E/D, so they live beside the
 # MMCLAST-cg runs.  HOST_TAG picks the sub-directory (default: the mid-10 host).
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_HERE, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 RESULTS = os.path.join(EXPS, "checkpoints", os.environ.get("HOST_TAG", "host"))
 LOGDIR = os.path.join(EXPS, "logs", os.environ.get("HOST_TAG", "host"))
-os.makedirs(RESULTS, exist_ok=True); os.makedirs(LOGDIR, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +91,20 @@ def to_01(x):
     return ((x + 1.0) * 0.5).clamp(0.0, 1.0)
 
 
+class _Swapped(torch.utils.data.Dataset):
+    """Serve (b, a, y) from a dataset that yields (a, b, y)."""
+
+    def __init__(self, ds):
+        self.ds = ds
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, i):
+        a, b, y = self.ds[i]
+        return b, a, y
+
+
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser()
@@ -121,6 +135,10 @@ def main():
                          "nn.DataParallel.  Worth it only if the per-GPU batch "
                          "stays large enough to amortise the per-step replicate/"
                          "scatter/gather; raise --batch alongside it.")
+    ap.add_argument("--swap_domains", action="store_true",
+                    help="exchange the two domains, so the generator stored as "
+                         "G_T1toFA is trained natively in the B->A (FA->T1) "
+                         "direction; checkpoint keys keep their names")
     ap.add_argument("--no_flip", action="store_true",
                     help="disable h-flip augmentation; required for chiral "
                          "content such as digits, where a mirrored sample is "
@@ -129,6 +147,8 @@ def main():
     if args.data == "folder" and not args.data_root:
         ap.error("--data folder requires --data_root")
 
+    os.makedirs(RESULTS, exist_ok=True)
+    os.makedirs(LOGDIR, exist_ok=True)
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device={device}  args={vars(args)}", flush=True)
@@ -146,6 +166,10 @@ def main():
                       img_ch=args.img_ch, seed=args.seed, flip=not args.no_flip)
         tr_ds = UnpairedFolderDataset(args.data_root, "train", train=True, **common)
         te_ds = UnpairedFolderDataset(args.data_root, "test", train=False, **common)
+    if args.swap_domains:
+        # Swap at the source so the losses and the evaluation below are untouched:
+        # the "T1"/A slot now holds FA/B and vice versa.
+        tr_ds, te_ds = _Swapped(tr_ds), _Swapped(te_ds)
     # Two independent loaders -> unpaired sampling of T1 and FA.
     loader_t1 = DataLoader(tr_ds, batch_size=args.batch, shuffle=True,
                            num_workers=args.workers, drop_last=True,
@@ -337,13 +361,14 @@ def main():
         R = args.data_root
         cdir = os.path.join(RESULTS, "fid_cache")
         kw = dict(crop=args.crop_size, img_ch=args.img_ch, batch=16)
-        f_ab = _fid.fid_against(_ls(f"{R}/testA"), G_T1toFA, _ls(f"{R}/trainB"),
-                                device, os.path.join(cdir, "trainB.npz"), **kw)
-        f_ba = _fid.fid_against(_ls(f"{R}/testB"), G_FAtoT1, _ls(f"{R}/trainA"),
-                                device, os.path.join(cdir, "trainA.npz"), **kw)
+        A, B = ("B", "A") if args.swap_domains else ("A", "B")   # source, target of G_T1toFA
+        f_ab = _fid.fid_against(_ls(f"{R}/test{A}"), G_T1toFA, _ls(f"{R}/train{B}"),
+                                device, os.path.join(cdir, f"train{B}.npz"), **kw)
+        f_ba = _fid.fid_against(_ls(f"{R}/test{B}"), G_FAtoT1, _ls(f"{R}/train{A}"),
+                                device, os.path.join(cdir, f"train{A}.npz"), **kw)
         with open(os.path.join(RESULTS, "final_eval.txt"), "w") as f:
-            f.write(f"FINAL (ep{args.epochs})  data={R}\n"
-                    f"FID A->B {f_ab:.2f}\nFID B->A {f_ba:.2f}\n")
+            f.write(f"FINAL (ep{args.epochs})  data={R}  swap_domains={args.swap_domains}\n"
+                    f"FID {A}->{B} {f_ab:.2f}\nFID {B}->{A} {f_ba:.2f}\n")
         print(f"training done (full schedule). FID A→B {f_ab:.2f}  B→A {f_ba:.2f} "
               f"-> {RESULTS}/final_eval.txt", flush=True)
         return
@@ -365,6 +390,8 @@ def main():
                 pAB.append(_psnr(gf[i, 0], fk[i, 0], data_range=1.0))
                 pBA.append(_psnr(gt[i, 0], kt[i, 0], data_range=1.0))
     with open(os.path.join(RESULTS, "final_eval.txt"), "w") as f:
+        if args.swap_domains:
+            f.write("swap_domains=True: 'T1toFA' below is the native FA->T1 generator\n")
         f.write(f"FINAL (ep{args.epochs}) T1toFA SSIM {_np.mean(sAB):.4f}±{_np.std(sAB):.4f} "
                 f"PSNR {_np.mean(pAB):.2f}\nFA toT1 SSIM {_np.mean(sBA):.4f}±{_np.std(sBA):.4f} "
                 f"PSNR {_np.mean(pBA):.2f}\n")

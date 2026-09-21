@@ -19,7 +19,7 @@
 # starts as soon as a card frees.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
-FROM="${FROM:-exps/checkpoints/h2z_latcyc/stage2.pth}"
+FROM="${FROM:-$MMCLAST_EXPS/horse2zebra/checkpoints/h2z_latcyc/stage2.pth}"
 GPUS="${GPUS:-0 1}"
 
 if [ ! -f "$FROM" ]; then
@@ -30,11 +30,9 @@ fi
 
 arm () {  # arm <gpu> <tag> <extra...>
   local gpu="$1" tag="$2"; shift 2
-  mkdir -p "$MMCLAST_EXPS/logs/$tag"
   echo "[$(date +%H:%M:%S)] start $tag on GPU$gpu"
   CUDA_VISIBLE_DEVICES="$gpu" python -u train.py --config configs/h2z_morph.yaml \
-      --tag "$tag" --resume_stage 2 --resume_from "$FROM" "$@" \
-    > "$MMCLAST_EXPS/logs/$tag/train.log" 2>&1
+      --tag "$tag" --resume_stage 2 --resume_from "$FROM" "$@"
   echo "[$(date +%H:%M:%S)] done  $tag"
 }
 
@@ -48,4 +46,4 @@ P1=$!
 ( arm "$B" h2z_morph_abs ) &
 P2=$!
 wait $P1 $P2
-echo "done -> $MMCLAST_EXPS/checkpoints/{h2z_morph_abs,h2z_morph_ra,h2z_morph_smooth}"
+echo "done -> $MMCLAST_EXPS/horse2zebra/checkpoints/{h2z_morph_abs,h2z_morph_ra,h2z_morph_smooth}"

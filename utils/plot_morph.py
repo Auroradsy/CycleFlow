@@ -40,7 +40,8 @@ from model import MMCLASTcg                                              # noqa:
 from utils.image import to_pm1, first_frame as _n, ssim as S                      # noqa: E402
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-EXPS = os.environ.get("MMCLAST_EXPS", os.path.join(_ROOT, "exps"))
+from server_paths import experiment_root, checkpoint_root
+EXPS = experiment_root()
 CKPT = os.path.join(EXPS, "checkpoints")
 FIGS = os.path.join(EXPS, "snapshot_results")
 

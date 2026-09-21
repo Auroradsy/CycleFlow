@@ -16,24 +16,22 @@
 # Sharing one S1+S2 is what removes that variable.
 #
 #   bash configs/run_s3_ablation.sh                    # both arms, one GPU
-#   FROM=exps/checkpoints/morph/stage2.pth bash configs/run_s3_ablation.sh
+#   FROM=$MMCLAST_EXPS/adni/checkpoints/morph/stage2.pth bash configs/run_s3_ablation.sh
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_env.sh"
 
-FROM="${FROM:-exps/checkpoints/morph/stage2.pth}"
+FROM="${FROM:-$MMCLAST_EXPS/adni/checkpoints/morph/stage2.pth}"
 [ -f "$FROM" ] || { echo "no stage-2 checkpoint at $FROM"; exit 1; }
 
 arm () {                    # arm <tag> <config>
   local tag="$1" cfg="$2"
-  mkdir -p "$MMCLAST_EXPS/logs/$tag"
   python train.py --config "configs/$cfg.yaml" --tag "$tag" \
-      --resume_stage 2 --resume_from "$FROM" "${EXTRA[@]}" 2>&1 \
-    | tee "$MMCLAST_EXPS/logs/$tag/train.log"
+      --resume_stage 2 --resume_from "$FROM" "${EXTRA[@]}"
 }
 
 EXTRA=("$@")
-echo "resuming both arms from $FROM on GPU $CUDA_VISIBLE_DEVICES"
+echo "resuming both arms from $FROM on GPU ${CUDA_VISIBLE_DEVICES:-scheduler/default}"
 arm morph_s3ctl    morph    &      # path_bidir = 0
 arm morph_bi_s3ctl morph_bi &      # path_bidir = 1
 wait
-echo "both arms done -> $MMCLAST_EXPS/checkpoints/{morph_s3ctl,morph_bi_s3ctl}"
+echo "both arms done -> $MMCLAST_EXPS/adni/checkpoints/{morph_s3ctl,morph_bi_s3ctl}"

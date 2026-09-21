@@ -13,7 +13,7 @@ Also writes manifest.csv (subject, t1_session, fa_session, status, seconds).
 import os, sys, glob, time, csv, tempfile, subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-B = "/data_new3/nfs_share/public/Imaging_genetic"
+B = os.environ["ADNI_RAW_ROOT"]
 FSLDIR = os.environ.get("FSLDIR", "/usr/local/fsl")
 REF_BRAIN = f"{FSLDIR}/data/standard/MNI152_T1_2mm_brain.nii.gz"
 REFMASK   = f"{FSLDIR}/data/standard/MNI152_T1_2mm_brain_mask_dil.nii.gz"
