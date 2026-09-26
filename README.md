@@ -1,4 +1,4 @@
-# MMCLAST-cg
+# FlowCycle
 
 
 **A CycleGAN rewired so that a single invertible flow *is* the bridge between modalities.**
